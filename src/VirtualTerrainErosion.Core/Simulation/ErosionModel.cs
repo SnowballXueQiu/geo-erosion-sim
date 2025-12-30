@@ -308,7 +308,7 @@ namespace VirtualTerrainErosion.Core.Simulation
             });
         }
 
-        public (double maxRelief, double meanElev, double drainDen, double hackSlope, double concavity) CalculateStats()
+        public (double maxRelief, double meanElev, double drainDen, double hackSlope, double concavity) CalculateStats(List<(double x, double y)>? hackData = null, List<(double x, double y)>? slopeAreaData = null)
         {
             int w = _grid.Width;
             int h = _grid.Height;
@@ -333,7 +333,12 @@ namespace VirtualTerrainErosion.Core.Simulation
             double hackSlope = 0.0;
             double concavity = 0.0;
 
-            var (hackData, slopeAreaData) = GetRiverStats();
+            if (hackData == null || slopeAreaData == null)
+            {
+                var stats = GetRiverStats();
+                hackData = stats.hackData;
+                slopeAreaData = stats.slopeAreaData;
+            }
 
             if (hackData.Count > 2)
             {

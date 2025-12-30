@@ -57,8 +57,9 @@ public partial class MainWindow : Window
         if (SldT != null) SldT.Value = _model.T;
         if (SldU != null) SldU.Value = _model.U;
 
-        _model.CalculateStats();
-        UpdateView();
+        var riverStats = _model.GetRiverStats();
+        var stats = _model.CalculateStats(riverStats.hackData, riverStats.slopeAreaData);
+        UpdateView(stats, riverStats);
     }
 
     private void OnParamChanged(object? sender, global::Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
@@ -104,9 +105,8 @@ public partial class MainWindow : Window
     private void OnResetClick(object? sender, RoutedEventArgs e)
     {
         StopSimulation();
-        InitializeModel();
         _stepCount = 0;
-        UpdateView();
+        InitializeModel();
         TxtStatus.Text = "已重置";
     }
 
@@ -134,6 +134,7 @@ public partial class MainWindow : Window
     }
 
     private int _viewMode = 1; // 0=Height, 1=Hillshade, 2=Water
+    private WriteableBitmap? _bmpBuffer;
 
     private void OnViewModeChanged(object? sender, SelectionChangedEventArgs e)
     {
@@ -144,39 +145,72 @@ public partial class MainWindow : Window
         }
     }
 
+    private int _isTicking = 0;
+    private int _tickCounter = 0;
+
     private void Tick(object? state)
     {
         if (!_isRunning) return;
         
-        // Run multiple steps per frame based on speed setting
-        for(int i=0; i<_stepsPerFrame; i++)
+        // Prevent re-entry if previous tick is still running
+        if (Interlocked.CompareExchange(ref _isTicking, 1, 0) != 0) return;
+
+        try
         {
-            _model.Step();
-            _stepCount++;
+            // Run multiple steps per frame based on speed setting
+            for(int i=0; i<_stepsPerFrame; i++)
+            {
+                _model.Step();
+                _stepCount++;
+            }
+            
+            // Calculate stats on background thread
+            // Only every 5th tick to save CPU (approx 250ms)
+            (double maxRelief, double meanElev, double drainDen, double hackSlope, double concavity)? stats = null;
+            (List<(double x, double y)> hackData, List<(double x, double y)> slopeAreaData)? riverStats = null;
+            
+            _tickCounter++;
+            if (_tickCounter % 5 == 0)
+            {
+                riverStats = _model.GetRiverStats();
+                stats = _model.CalculateStats(riverStats?.hackData, riverStats?.slopeAreaData);
+            }
+            
+            // Update UI on UI thread
+            Dispatcher.UIThread.Post(() =>
+            {
+                UpdateView(stats, riverStats);
+            });
         }
-        
-        // Update UI on UI thread
-        Dispatcher.UIThread.Post(() =>
+        finally
         {
-            UpdateView();
-        });
+            _isTicking = 0;
+        }
     }
 
-    private void UpdateView()
+    private void UpdateView((double maxRelief, double meanElev, double drainDen, double hackSlope, double concavity)? stats = null, 
+                            (List<(double x, double y)> hackData, List<(double x, double y)> slopeAreaData)? riverStats = null)
     {
         TxtStep.Text = $"Step: {_stepCount}";
-        var stats = _model.CalculateStats();
-        TxtRelief.Text = $"Relief: {stats.maxRelief:F1}m";
-        if (TxtHack != null) TxtHack.Text = $"Hack Slope: {stats.hackSlope:F2}";
-        if (TxtConcavity != null) TxtConcavity.Text = $"Concavity: {stats.concavity:F2}";
+        
+        if (stats.HasValue)
+        {
+            var s = stats.Value;
+            TxtRelief.Text = $"Relief: {s.maxRelief:F1}m";
+            if (TxtHack != null) TxtHack.Text = $"Hack Slope: {s.hackSlope:F2}";
+            if (TxtConcavity != null) TxtConcavity.Text = $"Concavity: {s.concavity:F2}";
+        }
 
         // Render bitmap
         ImgTerrain.Source = CreateBitmap(_model.Grid);
 
         // Draw Charts
-        var (hackData, slopeAreaData) = _model.GetRiverStats();
-        DrawChart(CanvasHack, hackData, "Log(A)", "Log(L)", Brushes.Cyan);
-        DrawChart(CanvasSlopeArea, slopeAreaData, "Log(A)", "Log(S)", Brushes.Orange);
+        if (riverStats.HasValue)
+        {
+            var (hackData, slopeAreaData) = riverStats.Value;
+            DrawChart(CanvasHack, hackData, "Log(A)", "Log(L)", Brushes.Cyan);
+            DrawChart(CanvasSlopeArea, slopeAreaData, "Log(A)", "Log(S)", Brushes.Orange);
+        }
     }
 
     private void DrawChart(Canvas canvas, List<(double x, double y)> data, string xLabel, string yLabel, IBrush color)
@@ -226,38 +260,41 @@ public partial class MainWindow : Window
     {
         int w = grid.Width;
         int h = grid.Height;
-        var bmp = new WriteableBitmap(new global::Avalonia.PixelSize(w, h), new global::Avalonia.Vector(96, 96), global::Avalonia.Platform.PixelFormat.Bgra8888, global::Avalonia.Platform.AlphaFormat.Opaque);
+        
+        // Reuse bitmap buffer if possible
+        if (_bmpBuffer == null || _bmpBuffer.PixelSize.Width != w || _bmpBuffer.PixelSize.Height != h)
+        {
+            _bmpBuffer?.Dispose();
+            _bmpBuffer = new WriteableBitmap(new global::Avalonia.PixelSize(w, h), new global::Avalonia.Vector(96, 96), global::Avalonia.Platform.PixelFormat.Bgra8888, global::Avalonia.Platform.AlphaFormat.Opaque);
+        }
+        
+        var bmp = _bmpBuffer;
 
         bool showRivers = ChkRivers?.IsChecked ?? false;
 
         using (var buf = bmp.Lock())
         {
-            // Robust Min/Max Calculation (Percentile Clipping)
-            int totalPixels = w * h;
+            // Optimization: Skip sorting for min/max, use sampling or simple min/max
+            // Sorting 65k items every frame is slow.
             
-            double[] heights = new double[totalPixels];
-            int idx = 0;
+            double min = double.MaxValue;
+            double max = double.MinValue;
             double maxWater = 0;
-
-            for(int y=0; y<h; y++)
-                for(int x=0; x<w; x++)
+            
+            // Sample 1/16th of pixels for speed
+            int step = 4;
+            for(int y=0; y<h; y+=step)
+                for(int x=0; x<w; x+=step)
                 {
                     double val = grid.H[x,y];
-                    if (double.IsNaN(val) || double.IsInfinity(val)) val = 0; // Safety
-                    heights[idx++] = val;
-                    
+                    if (!double.IsNaN(val) && !double.IsInfinity(val)) {
+                        if (val < min) min = val;
+                        if (val > max) max = val;
+                    }
                     if(grid.W[x,y] > maxWater) maxWater = grid.W[x,y];
                 }
             
-            Array.Sort(heights);
-            
-            // Clip top/bottom 1% outliers
-            int minIdx = (int)(totalPixels * 0.01);
-            int maxIdx = (int)(totalPixels * 0.99);
-            if (maxIdx >= totalPixels) maxIdx = totalPixels - 1;
-            
-            double min = heights[minIdx];
-            double max = heights[maxIdx];
+            if (min == double.MaxValue) { min = 0; max = 100; }
             
             double range = max - min;
             if (range < 0.001) range = 1;
