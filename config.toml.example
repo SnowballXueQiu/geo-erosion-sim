@@ -1,0 +1,13 @@
+# Database Configuration
+[database]
+connection_string = "Server=YOUR_SERVER,1433;Database=YOUR_DB;User Id=YOUR_USER;Password=YOUR_PASSWORD;TrustServerCertificate=True;Encrypt=True;"
+
+# Simulation Defaults
+[simulation]
+grid_size = 256
+max_steps = 100
+rain_p = 100.0
+erosion_k = 0.005
+deposition_d = 0.003
+threshold_t = 20.0
+uplift_u = 10.0

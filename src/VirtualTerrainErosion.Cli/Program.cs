@@ -13,7 +13,13 @@ namespace VirtualTerrainErosion.Cli
             Console.WriteLine("Virtual Terrain Erosion Simulation (CLI Mode)");
             Console.WriteLine("-------------------------------------------");
 
-            var settings = new AppSettings();
+            // Load settings
+            string configPath = "config.toml";
+            if (!System.IO.File.Exists(configPath))
+            {
+                 if (System.IO.File.Exists("../../../../../config.toml")) configPath = "../../../../../config.toml";
+            }
+            var settings = AppSettings.Load(configPath);
             
             // Allow overriding connection string via args or env var if needed
             string envConn = Environment.GetEnvironmentVariable("GES_CONNECTION_STRING");
@@ -23,6 +29,13 @@ namespace VirtualTerrainErosion.Cli
             Console.WriteLine($"Database: {settings.ConnectionString}");
 
             var model = new ErosionModel(settings.GridSize);
+            // Apply params
+            model.P = settings.DefaultP;
+            model.K = settings.DefaultK;
+            model.D = settings.DefaultD;
+            model.T = settings.DefaultT;
+            model.U = settings.DefaultU;
+
             var dbLogger = new DbLogger(settings.ConnectionString);
 
             Console.WriteLine("Initializing Terrain...");

@@ -38,6 +38,9 @@ bld/
 # Mac
 .DS_Store
 
+# Configuration
+config.toml
+
 # Output files
 *.asc
 *.png

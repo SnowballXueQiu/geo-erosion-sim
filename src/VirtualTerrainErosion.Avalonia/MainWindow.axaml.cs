@@ -12,16 +12,40 @@ namespace VirtualTerrainErosion.Avalonia;
 
 public partial class MainWindow : Window
 {
-    private ErosionModel _model;
+    private ErosionModel _model = null!;
     private Timer? _timer;
     private bool _isRunning;
     private int _stepCount;
     private int _stepsPerFrame = 1;
+    private AppSettings _settings;
 
     public MainWindow()
     {
         InitializeComponent();
-        _model = new ErosionModel(256);
+        
+        // Load settings from config.toml in the current directory (project root when running via dotnet run)
+        // Or try to find it by going up directories if needed.
+        string configPath = "config.toml";
+        if (!File.Exists(configPath))
+        {
+            // Try looking up a few levels if running from bin/Debug/...
+            if (File.Exists("../../../../../config.toml")) configPath = "../../../../../config.toml";
+        }
+        
+        _settings = AppSettings.Load(configPath);
+        
+        InitializeModel();
+    }
+
+    private void InitializeModel()
+    {
+        _model = new ErosionModel(_settings.GridSize);
+        _model.P = _settings.DefaultP;
+        _model.K = _settings.DefaultK;
+        _model.D = _settings.DefaultD;
+        _model.T = _settings.DefaultT;
+        _model.U = _settings.DefaultU;
+        
         _model.CalculateStats();
         UpdateView();
     }
@@ -50,7 +74,7 @@ public partial class MainWindow : Window
     private void OnResetClick(object? sender, RoutedEventArgs e)
     {
         StopSimulation();
-        _model = new ErosionModel(256);
+        InitializeModel();
         _stepCount = 0;
         UpdateView();
         TxtStatus.Text = "Reset";
