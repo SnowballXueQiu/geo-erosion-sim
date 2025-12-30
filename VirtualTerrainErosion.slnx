@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VirtualTerrainErosion.Avalonia/VirtualTerrainErosion.Avalonia.csproj" />
+    <Project Path="src/VirtualTerrainErosion.Cli/VirtualTerrainErosion.Cli.csproj" />
+    <Project Path="src/VirtualTerrainErosion.Core/VirtualTerrainErosion.Core.csproj" />
+  </Folder>
+  <Folder Name="/src/VirtualTerrainErosion.WinForms/">
+    <Project Path="src/VirtualTerrainErosion.WinForms/VirtualTerrainErosion.csproj" />
+  </Folder>
+</Solution>
