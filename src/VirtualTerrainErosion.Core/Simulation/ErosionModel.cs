@@ -32,21 +32,54 @@ namespace VirtualTerrainErosion.Core.Simulation
             int w = _grid.Width;
             int h = _grid.Height;
             
-            // Initialize Hardness bands
-            // e.g. every 20 rows switch between hard (2.0) and soft (0.5)
+            // Generate Fractal Noise (Perlin-like)
+            // Sum of sines with random phases/frequencies
+            int octaves = 6;
+            double persistence = 0.45; // Reduced persistence for smoother terrain
+            double lacunarity = 2.0;
+            double scale = 0.015; // Reduced scale for larger features
+            
+            double[] offsetsX = new double[octaves];
+            double[] offsetsY = new double[octaves];
+            for(int k=0; k<octaves; k++) {
+                offsetsX[k] = _rand.NextDouble() * 1000;
+                offsetsY[k] = _rand.NextDouble() * 1000;
+            }
+
             for (int i = 0; i < w; i++)
             {
                 for (int j = 0; j < h; j++)
                 {
-                    // 2000 + 400*sin(i*0.1) + 200*sin(j*0.15) + noise
-                    _grid.H[i, j] = 2000 + 400 * Math.Sin(i * 0.1) + 200 * Math.Sin(j * 0.15) + _rand.Next(-50, 50);
+                    double amplitude = 1000.0;
+                    double frequency = scale;
+                    double height = 0;
+                    
+                    for(int k=0; k<octaves; k++)
+                    {
+                        // Simple "noise" using sin/cos
+                        double nx = (i + offsetsX[k]) * frequency;
+                        double ny = (j + offsetsY[k]) * frequency;
+                        
+                        // Mix sin/cos to look less regular
+                        double val = Math.Sin(nx) * Math.Cos(ny);
+                        
+                        height += val * amplitude;
+                        
+                        amplitude *= persistence;
+                        frequency *= lacunarity;
+                    }
+                    
+                    // Add a central mountain shape to bias it
+                    double dx = i - w/2.0;
+                    double dy = j - h/2.0;
+                    double dist = Math.Sqrt(dx*dx + dy*dy);
+                    double mountain = 2000.0 * Math.Exp(-(dist*dist) / (2 * (w*0.4)*(w*0.4)));
+                    
+                    _grid.H[i, j] = Math.Max(0, 500 + mountain + height);
                     _grid.W[i, j] = 0;
                     
-                    // Lithology: Bands along Y axis
-                    if ((j / 20) % 2 == 0)
-                        _grid.Hardness[i, j] = 2.0; // Hard rock
-                    else
-                        _grid.Hardness[i, j] = 0.5; // Soft rock
+                    // Uniform Hardness to prevent horizontal stripes
+                    _grid.Hardness[i, j] = 1.0; 
                 }
             }
             Steps = 0;
@@ -60,7 +93,46 @@ namespace VirtualTerrainErosion.Core.Simulation
             CalculateFlowAccumulation();
             CalculateSlope();
             ErodeAndDeposit();
+            ThermalErosion(); // Add diffusion
             ApplyUplift();
+        }
+
+        private void ThermalErosion()
+        {
+            // Hillslope Diffusion (Thermal Erosion)
+            // Smooths terrain and transports material downhill
+            int w = _grid.Width;
+            int h = _grid.Height;
+            double Kt = 0.05; // Diffusion coefficient
+            
+            // Use a temporary buffer to store changes to avoid race conditions/bias
+            double[,] changes = new double[w, h];
+
+            Parallel.For(1, w - 1, i =>
+            {
+                for (int j = 1; j < h - 1; j++)
+                {
+                    double hVal = _grid.H[i, j];
+                    double d1 = _grid.H[i+1, j] - hVal;
+                    double d2 = _grid.H[i-1, j] - hVal;
+                    double d3 = _grid.H[i, j+1] - hVal;
+                    double d4 = _grid.H[i, j-1] - hVal;
+                    
+                    // Laplacian
+                    double laplacian = d1 + d2 + d3 + d4;
+                    
+                    changes[i, j] = Kt * laplacian;
+                }
+            });
+            
+            // Apply changes
+            Parallel.For(1, w - 1, i =>
+            {
+                for (int j = 1; j < h - 1; j++)
+                {
+                    _grid.H[i, j] += changes[i, j];
+                }
+            });
         }
 
         private void ApplyRainfall()
@@ -200,12 +272,27 @@ namespace VirtualTerrainErosion.Core.Simulation
                     if (qs > effectiveT)
                     {
                         dh = effectiveK * (qs - effectiveT) * dt; // Erosion
+                        
+                        // Stability Clamp: Don't erode more than 5 units per step
+                        if (dh > 5.0) dh = 5.0;
+                        
                         _grid.H[i, j] -= dh;
                     }
                     else
                     {
                         dh = -D * (effectiveT - qs) * dt; // Deposition
+                        
+                        // Stability Clamp: Don't deposit more than 5 units per step
+                        // dh is negative here, so we check if it's less than -5.0
+                        if (dh < -5.0) dh = -5.0;
+                        
                         _grid.H[i, j] -= dh;
+                    }
+                    
+                    // NaN/Infinity Safety Check
+                    if (double.IsNaN(_grid.H[i, j]) || double.IsInfinity(_grid.H[i, j]))
+                    {
+                        _grid.H[i, j] = 0.0;
                     }
                 }
             });
@@ -242,73 +329,97 @@ namespace VirtualTerrainErosion.Core.Simulation
             double meanElev = sumH / (w * h);
             double drainDen = (double)channelCells / (w * h);
 
-            // Hack's Law & Concavity (Simplified placeholders)
-            // Real calculation requires tracing the longest river.
-            // For this simplified version, we can just return dummy or simple regression on all channel cells.
-            // Hack: L ~ A^h => log(L) = h * log(A) + c. Slope is h.
-            // Concavity: S ~ A^(-theta) => log(S) = -theta * log(A) + c. Slope is -theta.
-            
-            // Let's do a quick regression on cells with Q > 100
-            double hackSlope = 0.6; // Placeholder
-            double concavity = 0.45; // Placeholder
+            // Hack's Law & Concavity
+            double hackSlope = 0.0;
+            double concavity = 0.0;
 
-            // To do it properly:
-            // 1. Find outlet with max Q.
-            // 2. Trace upstream to find longest path L.
-            // 3. Collect (L, A) points along that path.
-            // 4. Regression.
-            
-            // Implementing a simple trace for the single largest basin
-            var outlet = FindOutlet();
-            if (outlet.i != -1)
+            var (hackData, slopeAreaData) = GetRiverStats();
+
+            if (hackData.Count > 2)
             {
-                var path = TraceLongestPath(outlet.i, outlet.j);
-                if (path.Count > 5)
-                {
-                    // Concavity: log(S) vs log(A)
-                    // Hack: log(L) vs log(A)
-                    // L is distance from divide? Or distance from outlet?
-                    // Hack's law: L = C * A^h. L is length of stream from source to point? Or length of basin?
-                    // Usually L is length of the main stream.
-                    
-                    // Let's calculate Concavity (Slope-Area)
-                    // log(S) = -theta * log(A) + k
-                    // We regress log(S) against log(A)
-                    
-                    double sumLogA = 0, sumLogS = 0, sumLogALogS = 0, sumLogA2 = 0;
-                    int n = 0;
-                    foreach(var p in path)
-                    {
-                        double s = _grid.S[p.i, p.j];
-                        double a = _grid.Q[p.i, p.j];
-                        if(s > 0.0001 && a > 0)
-                        {
-                            double la = Math.Log10(a);
-                            double ls = Math.Log10(s);
-                            sumLogA += la;
-                            sumLogS += ls;
-                            sumLogALogS += la * ls;
-                            sumLogA2 += la * la;
-                            n++;
-                        }
-                    }
-                    if (n > 2)
-                    {
-                        double slope = (n * sumLogALogS - sumLogA * sumLogS) / (n * sumLogA2 - sumLogA * sumLogA);
-                        concavity = -slope;
-                    }
-                    
-                    // Hack's Law: L vs A
-                    // L is length from source.
-                    // We have the path from outlet to source (or vice versa).
-                    // Let's assume path is ordered.
-                    // We need L at each point.
-                    // Let's just return the concavity for now as it's requested.
-                    // Hack slope is usually around 0.6.
-                }
+                // Regress log(L) = h * log(A) + c
+                hackSlope = CalculateSlope(hackData);
+            }
+
+            if (slopeAreaData.Count > 2)
+            {
+                // Regress log(S) = -theta * log(A) + k
+                // Slope is -theta, so theta = -Slope
+                double s = CalculateSlope(slopeAreaData);
+                concavity = -s;
             }
 
             return (maxRelief, meanElev, drainDen, hackSlope, concavity);
+        }
+
+        private double CalculateSlope(List<(double x, double y)> data)
+        {
+            double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+            int n = data.Count;
+            foreach (var p in data)
+            {
+                sumX += p.x;
+                sumY += p.y;
+                sumXY += p.x * p.y;
+                sumX2 += p.x * p.x;
+            }
+            return (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        }
+
+        public (List<(double logA, double logL)> hackData, List<(double logA, double logS)> slopeAreaData) GetRiverStats()
+        {
+            var hackData = new List<(double, double)>();
+            var slopeAreaData = new List<(double, double)>();
+
+            var outlet = FindOutlet();
+            if (outlet.i == -1) return (hackData, slopeAreaData);
+
+            var path = TraceLongestPath(outlet.i, outlet.j);
+            // Path is returned as Outlet -> Source (upstream trace)
+            // For Hack's Law, L is usually length from the divide (source).
+            // So L=0 at the end of the list (source), and L=Max at the start (outlet).
+            
+            // Let's iterate from Source (end of list) to Outlet (start of list)
+            double currentL = 0;
+            
+            for (int k = path.Count - 1; k >= 0; k--)
+            {
+                var (i, j) = path[k];
+                
+                // Update L
+                if (k < path.Count - 1)
+                {
+                    var (prevI, prevJ) = path[k+1]; // Previous point in loop (upstream)
+                    double dist = (Math.Abs(i - prevI) + Math.Abs(j - prevJ) == 2) ? 1.414 : 1.0;
+                    currentL += dist;
+                }
+                else
+                {
+                    currentL = 1.0; // Start with some length
+                }
+
+                double A = _grid.Q[i, j];
+                double S = _grid.S[i, j];
+
+                if (A > 0)
+                {
+                    double logA = Math.Log10(A);
+                    
+                    // Hack's Law: L vs A
+                    if (currentL > 0)
+                    {
+                        hackData.Add((logA, Math.Log10(currentL)));
+                    }
+
+                    // Slope-Area: S vs A
+                    if (S > 0.0001)
+                    {
+                        slopeAreaData.Add((logA, Math.Log10(S)));
+                    }
+                }
+            }
+
+            return (hackData, slopeAreaData);
         }
 
         private (int i, int j) FindOutlet()
@@ -386,6 +497,9 @@ namespace VirtualTerrainErosion.Core.Simulation
                 {
                     currI = nextI;
                     currJ = nextJ;
+                    
+                    // Loop detection (simple)
+                    if (path.Count > w * h) break;
                 }
                 else
                 {

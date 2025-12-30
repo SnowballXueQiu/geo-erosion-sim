@@ -1,9 +1,13 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using VirtualTerrainErosion.Core;
 using VirtualTerrainErosion.Core.Simulation;
@@ -46,8 +50,34 @@ public partial class MainWindow : Window
         _model.T = _settings.DefaultT;
         _model.U = _settings.DefaultU;
         
+        // Sync sliders
+        if (SldP != null) SldP.Value = _model.P;
+        if (SldK != null) SldK.Value = _model.K;
+        if (SldD != null) SldD.Value = _model.D;
+        if (SldT != null) SldT.Value = _model.T;
+        if (SldU != null) SldU.Value = _model.U;
+
         _model.CalculateStats();
         UpdateView();
+    }
+
+    private void OnParamChanged(object? sender, global::Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        if (_model == null) return;
+        if (sender == SldP) _model.P = e.NewValue;
+        if (sender == SldK) _model.K = e.NewValue;
+        if (sender == SldD) _model.D = e.NewValue;
+        if (sender == SldT) _model.T = e.NewValue;
+        if (sender == SldU) _model.U = e.NewValue;
+    }
+
+    private void OnViewModeChanged(object? sender, RoutedEventArgs e)
+    {
+        if (CboViewMode != null)
+        {
+            _viewMode = CboViewMode.SelectedIndex;
+            UpdateView();
+        }
     }
 
     private void OnStartClick(object? sender, RoutedEventArgs e)
@@ -55,7 +85,7 @@ public partial class MainWindow : Window
         if (_isRunning) return;
         _isRunning = true;
         _timer = new Timer(Tick, null, 0, 50); // 50ms interval
-        TxtStatus.Text = "Running...";
+        TxtStatus.Text = "运行中...";
     }
 
     private void StopSimulation()
@@ -63,7 +93,7 @@ public partial class MainWindow : Window
         _isRunning = false;
         _timer?.Dispose();
         _timer = null;
-        TxtStatus.Text = "Paused";
+        TxtStatus.Text = "已暂停";
     }
 
     private void OnStopClick(object? sender, RoutedEventArgs e)
@@ -77,20 +107,20 @@ public partial class MainWindow : Window
         InitializeModel();
         _stepCount = 0;
         UpdateView();
-        TxtStatus.Text = "Reset";
+        TxtStatus.Text = "已重置";
     }
 
     private void OnExportClick(object? sender, RoutedEventArgs e)
     {
         try
         {
-            string path = Path.Combine(Directory.GetCurrentDirectory(), $"terrain_{_stepCount}.asc");
+            string path = System.IO.Path.Combine(Directory.GetCurrentDirectory(), $"terrain_{_stepCount}.asc");
             GeoExporter.ExportToAscii(_model.Grid, path);
-            TxtStatus.Text = $"Exported to {Path.GetFileName(path)}";
+            TxtStatus.Text = $"已导出至 {System.IO.Path.GetFileName(path)}";
         }
         catch (Exception ex)
         {
-            TxtStatus.Text = $"Error: {ex.Message}";
+            TxtStatus.Text = $"错误: {ex.Message}";
         }
     }
 
@@ -100,6 +130,17 @@ public partial class MainWindow : Window
         if (TxtSpeedValue != null)
         {
             TxtSpeedValue.Text = _stepsPerFrame.ToString();
+        }
+    }
+
+    private int _viewMode = 1; // 0=Height, 1=Hillshade, 2=Water
+
+    private void OnViewModeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (CboViewMode != null)
+        {
+            _viewMode = CboViewMode.SelectedIndex;
+            UpdateView();
         }
     }
 
@@ -126,88 +167,200 @@ public partial class MainWindow : Window
         TxtStep.Text = $"Step: {_stepCount}";
         var stats = _model.CalculateStats();
         TxtRelief.Text = $"Relief: {stats.maxRelief:F1}m";
+        if (TxtHack != null) TxtHack.Text = $"Hack Slope: {stats.hackSlope:F2}";
+        if (TxtConcavity != null) TxtConcavity.Text = $"Concavity: {stats.concavity:F2}";
 
         // Render bitmap
         ImgTerrain.Source = CreateBitmap(_model.Grid);
+
+        // Draw Charts
+        var (hackData, slopeAreaData) = _model.GetRiverStats();
+        DrawChart(CanvasHack, hackData, "Log(A)", "Log(L)", Brushes.Cyan);
+        DrawChart(CanvasSlopeArea, slopeAreaData, "Log(A)", "Log(S)", Brushes.Orange);
+    }
+
+    private void DrawChart(Canvas canvas, List<(double x, double y)> data, string xLabel, string yLabel, IBrush color)
+    {
+        if (canvas == null) return;
+        canvas.Children.Clear();
+        if (data == null || data.Count < 2) return;
+
+        double w = canvas.Bounds.Width;
+        double h = canvas.Bounds.Height;
+        if (w == 0 || h == 0) return; // Not laid out yet
+
+        // Find min/max
+        double minX = double.MaxValue, maxX = double.MinValue;
+        double minY = double.MaxValue, maxY = double.MinValue;
+
+        foreach (var p in data)
+        {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+
+        double rangeX = maxX - minX;
+        double rangeY = maxY - minY;
+        if (rangeX < 0.001) rangeX = 1;
+        if (rangeY < 0.001) rangeY = 1;
+
+        var polyline = new Polyline
+        {
+            Stroke = color,
+            StrokeThickness = 2
+        };
+
+        foreach (var p in data)
+        {
+            double px = (p.x - minX) / rangeX * w;
+            double py = h - (p.y - minY) / rangeY * h; // Invert Y
+            polyline.Points.Add(new global::Avalonia.Point(px, py));
+        }
+
+        canvas.Children.Add(polyline);
     }
 
     private WriteableBitmap CreateBitmap(TerrainGrid grid)
     {
         int w = grid.Width;
         int h = grid.Height;
-        // Use global::Avalonia to avoid namespace collision with current namespace
         var bmp = new WriteableBitmap(new global::Avalonia.PixelSize(w, h), new global::Avalonia.Vector(96, 96), global::Avalonia.Platform.PixelFormat.Bgra8888, global::Avalonia.Platform.AlphaFormat.Opaque);
+
+        bool showRivers = ChkRivers?.IsChecked ?? false;
 
         using (var buf = bmp.Lock())
         {
-            double min = double.MaxValue;
-            double max = double.MinValue;
+            // Robust Min/Max Calculation (Percentile Clipping)
+            int totalPixels = w * h;
+            
+            double[] heights = new double[totalPixels];
+            int idx = 0;
+            double maxWater = 0;
+
             for(int y=0; y<h; y++)
                 for(int x=0; x<w; x++)
                 {
                     double val = grid.H[x,y];
-                    if(val < min) min = val;
-                    if(val > max) max = val;
+                    if (double.IsNaN(val) || double.IsInfinity(val)) val = 0; // Safety
+                    heights[idx++] = val;
+                    
+                    if(grid.W[x,y] > maxWater) maxWater = grid.W[x,y];
                 }
+            
+            Array.Sort(heights);
+            
+            // Clip top/bottom 1% outliers
+            int minIdx = (int)(totalPixels * 0.01);
+            int maxIdx = (int)(totalPixels * 0.99);
+            if (maxIdx >= totalPixels) maxIdx = totalPixels - 1;
+            
+            double min = heights[minIdx];
+            double max = heights[maxIdx];
+            
             double range = max - min;
             if (range < 0.001) range = 1;
+            if (maxWater < 0.001) maxWater = 1;
 
             unsafe
             {
                 uint* ptr = (uint*)buf.Address;
                 int stride = buf.RowBytes / 4;
 
-                // Parallel rendering for performance
                 System.Threading.Tasks.Parallel.For(0, h, y =>
                 {
                     for (int x = 0; x < w; x++)
                     {
-                        double val = grid.H[x, y];
-                        double t = (val - min) / range; // Normalized 0..1
-                        
-                        // Color Palette Interpolation
-                        // 0.0 - 0.3: Green (Vegetation)
-                        // 0.3 - 0.6: Brown (Earth)
-                        // 0.6 - 0.8: Grey (Rock)
-                        // 0.8 - 1.0: White (Snow)
-                        
-                        byte r, g, b;
-                        
-                        if (t < 0.3)
-                        {
-                            // Dark Green (34, 139, 34) to Light Green (100, 200, 50)
-                            double localT = t / 0.3;
-                            r = (byte)(34 + (100 - 34) * localT);
-                            g = (byte)(139 + (200 - 139) * localT);
-                            b = (byte)(34 + (50 - 34) * localT);
-                        }
-                        else if (t < 0.6)
-                        {
-                            // Light Green (100, 200, 50) to Brown (139, 69, 19)
-                            double localT = (t - 0.3) / 0.3;
-                            r = (byte)(100 + (139 - 100) * localT);
-                            g = (byte)(200 + (69 - 200) * localT);
-                            b = (byte)(50 + (19 - 50) * localT);
-                        }
-                        else if (t < 0.8)
-                        {
-                            // Brown (139, 69, 19) to Grey (100, 100, 100)
-                            double localT = (t - 0.6) / 0.2;
-                            r = (byte)(139 + (100 - 139) * localT);
-                            g = (byte)(69 + (100 - 69) * localT);
-                            b = (byte)(19 + (100 - 19) * localT);
-                        }
-                        else
-                        {
-                            // Grey (100, 100, 100) to White (255, 255, 255)
-                            double localT = (t - 0.8) / 0.2;
-                            r = (byte)(100 + (255 - 100) * localT);
-                            g = (byte)(100 + (255 - 100) * localT);
-                            b = (byte)(100 + (255 - 100) * localT);
-                        }
+                        uint pixel = 0;
+                        bool isRiver = showRivers && grid.Q[x, y] > 100;
 
-                        // BGRA
-                        uint pixel = (uint)((255 << 24) | (r << 16) | (g << 8) | b);
+                        if (isRiver)
+                        {
+                            // Blue highlight for rivers (Cyan-ish)
+                            pixel = unchecked((uint)((255 << 24) | (0 << 16) | (191 << 8) | (255 << 0)));
+                        }
+                        else if (_viewMode == 1) // Hillshade
+                        {
+                            // Simple hillshade calculation
+                            double dzdx = 0;
+                            double dzdy = 0;
+                            
+                            double hC = grid.H[x, y];
+                            double hL = (x > 0) ? grid.H[x-1, y] : hC;
+                            double hR = (x < w - 1) ? grid.H[x+1, y] : hC;
+                            double hU = (y > 0) ? grid.H[x, y-1] : hC;
+                            double hD = (y < h - 1) ? grid.H[x, y+1] : hC;
+
+                            dzdx = (hR - hL) / 2.0;
+                            dzdy = (hD - hU) / 2.0;
+                            
+                            double nx = -dzdx;
+                            double ny = -dzdy;
+                            double nz = 1.0;
+                            double len = Math.Sqrt(nx*nx + ny*ny + nz*nz);
+                            if (len > 0) { nx /= len; ny /= len; nz /= len; }
+                            
+                            double lx = -0.707; 
+                            double ly = -0.707;
+                            double lz = 0.707; 
+                            
+                            double dot = nx*lx + ny*ly + nz*lz;
+                            if (dot < 0) dot = 0;
+                            
+                            byte intensity = (byte)(dot * 255);
+                            pixel = (uint)((255 << 24) | (intensity << 16) | (intensity << 8) | intensity);
+                        }
+                        else if (_viewMode == 2) // Water Flow
+                        {
+                            double water = grid.W[x, y];
+                            double t = Math.Min(water / (maxWater * 0.1), 1.0); 
+                            
+                            byte r = (byte)(20 + (0 - 20) * t);
+                            byte g = (byte)(20 + (100 - 20) * t);
+                            byte b = (byte)(50 + (255 - 50) * t);
+                            
+                            double hVal = (grid.H[x, y] - min) / range;
+                            if (hVal < 0) hVal = 0; if (hVal > 1) hVal = 1;
+                            
+                            byte hByte = (byte)(hVal * 100); 
+                            
+                            if (t > 0.01)
+                                pixel = (uint)((255 << 24) | (r << 16) | (g << 8) | b);
+                            else
+                                pixel = (uint)((255 << 24) | (hByte << 16) | (hByte << 8) | hByte);
+                        }
+                        else // Height Map (Color)
+                        {
+                            double val = grid.H[x, y];
+                            double t = (val - min) / range;
+                            if (t < 0) t = 0; if (t > 1) t = 1; 
+                            
+                            byte r, g, b;
+                            if (t < 0.3) { // Green
+                                double localT = t / 0.3;
+                                r = (byte)(34 + (100 - 34) * localT);
+                                g = (byte)(139 + (200 - 139) * localT);
+                                b = (byte)(34 + (50 - 34) * localT);
+                            } else if (t < 0.6) { // Brown
+                                double localT = (t - 0.3) / 0.3;
+                                r = (byte)(100 + (139 - 100) * localT);
+                                g = (byte)(200 + (69 - 200) * localT);
+                                b = (byte)(50 + (19 - 50) * localT);
+                            } else if (t < 0.8) { // Grey
+                                double localT = (t - 0.6) / 0.2;
+                                r = (byte)(139 + (100 - 139) * localT);
+                                g = (byte)(69 + (100 - 69) * localT);
+                                b = (byte)(19 + (100 - 19) * localT);
+                            } else { // White
+                                double localT = (t - 0.8) / 0.2;
+                                r = (byte)(100 + (255 - 100) * localT);
+                                g = (byte)(100 + (255 - 100) * localT);
+                                b = (byte)(100 + (255 - 100) * localT);
+                            }
+                            pixel = (uint)((255 << 24) | (r << 16) | (g << 8) | b);
+                        }
+                        
                         ptr[y * stride + x] = pixel;
                     }
                 });

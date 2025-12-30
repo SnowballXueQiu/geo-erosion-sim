@@ -15,43 +15,104 @@
         <Grid ColumnDefinitions="250,*" Margin="0,30,0,0">
             <!-- Sidebar Controls -->
             <Border Grid.Column="0" Background="#20FFFFFF" Padding="15" Margin="10,10,0,10" CornerRadius="5">
-                <StackPanel Spacing="15">
-                    <TextBlock Text="Controls" FontSize="18" FontWeight="Bold" Foreground="White"/>
-                    
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Name="BtnStart" Content="Start" Click="OnStartClick" Background="#4CAF50" Foreground="White"/>
-                        <Button Name="BtnStop" Content="Stop" Click="OnStopClick" Background="#F44336" Foreground="White"/>
-                    </StackPanel>
-                    
-                    <Button Name="BtnReset" Content="Reset Simulation" Click="OnResetClick" HorizontalAlignment="Stretch"/>
-                    
-                    <Separator Height="1" Background="#40FFFFFF"/>
-                    
-                    <TextBlock Text="Simulation Speed" FontWeight="SemiBold" Foreground="White"/>
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                        <TextBlock Text="Steps/Frame:" Foreground="#CCCCCC"/>
-                        <TextBlock Name="TxtSpeedValue" Text="1" Foreground="White"/>
-                    </StackPanel>
-                    <Slider Name="SldSpeed" Minimum="1" Maximum="50" Value="1" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnSpeedChanged"/>
+                <ScrollViewer>
+                    <StackPanel Spacing="15">
+                        <TextBlock Text="控制面板" FontSize="18" FontWeight="Bold" Foreground="White"/>
+                        
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Name="BtnStart" Content="开始" Click="OnStartClick" Background="#4CAF50" Foreground="White"/>
+                            <Button Name="BtnStop" Content="停止" Click="OnStopClick" Background="#F44336" Foreground="White"/>
+                        </StackPanel>
+                        
+                        <Button Name="BtnReset" Content="重置地形" Click="OnResetClick" HorizontalAlignment="Stretch"/>
+                        
+                        <Separator Height="1" Background="#40FFFFFF"/>
+                        
+                        <TextBlock Text="模型参数" FontWeight="SemiBold" Foreground="White"/>
+                        
+                        <!-- Rain P -->
+                        <StackPanel>
+                            <TextBlock Text="降雨量 (P)" Foreground="#CCCCCC" FontSize="12"/>
+                            <Slider Name="SldP" Minimum="0" Maximum="200" Value="100" ValueChanged="OnParamChanged"/>
+                        </StackPanel>
 
-                    <Separator Height="1" Background="#40FFFFFF"/>
+                        <!-- Erosion K -->
+                        <StackPanel>
+                            <TextBlock Text="侵蚀系数 (K)" Foreground="#CCCCCC" FontSize="12"/>
+                            <Slider Name="SldK" Minimum="0.001" Maximum="0.05" Value="0.005" TickFrequency="0.001" ValueChanged="OnParamChanged"/>
+                        </StackPanel>
 
-                    <Button Name="BtnExport" Content="Export .ASC" Click="OnExportClick" HorizontalAlignment="Stretch"/>
-                    
-                    <TextBlock Text="Status" FontWeight="SemiBold" Margin="0,10,0,0" Foreground="White"/>
-                    <TextBlock Name="TxtStatus" Text="Ready" TextWrapping="Wrap" Foreground="#AAAAAA"/>
-                    
-                    <StackPanel Margin="0,20,0,0" Spacing="5">
-                        <TextBlock Text="Statistics" FontWeight="SemiBold" Foreground="White"/>
-                        <TextBlock Name="TxtStep" Text="Step: 0" Foreground="#CCCCCC"/>
-                        <TextBlock Name="TxtRelief" Text="Relief: 0m" Foreground="#CCCCCC"/>
+                        <!-- Deposition D -->
+                        <StackPanel>
+                            <TextBlock Text="沉积系数 (D)" Foreground="#CCCCCC" FontSize="12"/>
+                            <Slider Name="SldD" Minimum="0.001" Maximum="0.05" Value="0.003" TickFrequency="0.001" ValueChanged="OnParamChanged"/>
+                        </StackPanel>
+
+                        <!-- Threshold T -->
+                        <StackPanel>
+                            <TextBlock Text="侵蚀阈值 (T)" Foreground="#CCCCCC" FontSize="12"/>
+                            <Slider Name="SldT" Minimum="0" Maximum="100" Value="20" ValueChanged="OnParamChanged"/>
+                        </StackPanel>
+
+                        <!-- Uplift U -->
+                        <StackPanel>
+                            <TextBlock Text="构造抬升 (U)" Foreground="#CCCCCC" FontSize="12"/>
+                            <Slider Name="SldU" Minimum="0" Maximum="50" Value="10" ValueChanged="OnParamChanged"/>
+                        </StackPanel>
+
+                        <Separator Height="1" Background="#40FFFFFF"/>
+                        
+                        <TextBlock Text="可视化设置" FontWeight="SemiBold" Foreground="White"/>
+                        <ComboBox Name="CboViewMode" SelectedIndex="1" HorizontalAlignment="Stretch" SelectionChanged="OnViewModeChanged">
+                            <ComboBoxItem>高程图 (彩色)</ComboBoxItem>
+                            <ComboBoxItem>山体阴影 (3D)</ComboBoxItem>
+                            <ComboBoxItem>水流分布</ComboBoxItem>
+                        </ComboBox>
+                        
+                        <CheckBox Name="ChkRivers" Content="显示河道网络" Foreground="White" IsChecked="False" Checked="OnViewModeChanged" Unchecked="OnViewModeChanged"/>
+
+                        <Separator Height="1" Background="#40FFFFFF"/>
+
+                        <TextBlock Text="模拟速度" FontWeight="SemiBold" Foreground="White"/>
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <TextBlock Text="步数/帧:" Foreground="#CCCCCC"/>
+                            <TextBlock Name="TxtSpeedValue" Text="1" Foreground="White"/>
+                        </StackPanel>
+                        <Slider Name="SldSpeed" Minimum="1" Maximum="50" Value="1" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnSpeedChanged"/>
+
+                        <Separator Height="1" Background="#40FFFFFF"/>
+
+                        <Button Name="BtnExport" Content="导出 .ASC 文件" Click="OnExportClick" HorizontalAlignment="Stretch"/>
+                        
+                        <TextBlock Text="状态" FontWeight="SemiBold" Margin="0,10,0,0" Foreground="White"/>
+                        <TextBlock Name="TxtStatus" Text="就绪" TextWrapping="Wrap" Foreground="#AAAAAA"/>
+                        
+                        <StackPanel Margin="0,20,0,0" Spacing="5">
+                            <TextBlock Text="统计数据" FontWeight="SemiBold" Foreground="White"/>
+                            <TextBlock Name="TxtStep" Text="步数: 0" Foreground="#CCCCCC"/>
+                            <TextBlock Name="TxtRelief" Text="最大高差: 0m" Foreground="#CCCCCC"/>
+                            <TextBlock Name="TxtHack" Text="Hack定律斜率: 0.0" Foreground="#CCCCCC"/>
+                            <TextBlock Name="TxtConcavity" Text="凹度 (Concavity): 0.0" Foreground="#CCCCCC"/>
+                        </StackPanel>
+                        
+                        <!-- Charts -->
+                        <TextBlock Text="Hack 河长定律 (L-A)" FontWeight="SemiBold" Margin="0,10,0,0" Foreground="White"/>
+                        <Border Height="100" Background="Black" BorderBrush="#40FFFFFF" BorderThickness="1">
+                            <Canvas Name="CanvasHack" Background="Transparent"/>
+                        </Border>
+                        
+                        <TextBlock Text="坡度-面积关系 (S-A)" FontWeight="SemiBold" Margin="0,10,0,0" Foreground="White"/>
+                        <Border Height="100" Background="Black" BorderBrush="#40FFFFFF" BorderThickness="1">
+                            <Canvas Name="CanvasSlopeArea" Background="Transparent"/>
+                        </Border>
+
                     </StackPanel>
-                </StackPanel>
+                </ScrollViewer>
             </Border>
 
             <!-- Visualization -->
             <Border Grid.Column="1" Margin="10" BorderBrush="#40FFFFFF" BorderThickness="1" CornerRadius="5" Background="Black" ClipToBounds="True">
-                <Image Name="ImgTerrain" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="LowQuality"/>
+                <Image Name="ImgTerrain" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="None"/>
             </Border>
         </Grid>
     </Panel>
